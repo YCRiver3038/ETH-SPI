@@ -1,6 +1,7 @@
 import multiprocessing
 import datetime
 import os
+from random import sample
 import socket
 import selectors
 import argparse
@@ -18,15 +19,20 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
     e_rcv_sock.setblocking(False)
     e_rcv_selector = selectors.DefaultSelector()
     e_rcv_selector.register(e_rcv_sock, selectors.EVENT_READ)
+    sample_interval = 1
+    if (plot_length > 4096):
+        sample_interval  = int(plot_length / 4096)
+        print(f"dala length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
+
     while True:
         e_rcv_selector.select()
         r_data = np.frombuffer(e_rcv_sock.recv(SOCK_BUF_SIZE), dtype=np.uint16)
         #FIFO buffer
-        o_array[0:(len(o_array)-len(r_data))] = o_array[len(r_data):]
-        o_array[(len(o_array)-len(r_data)):] = r_data
+        o_array[0:(plot_length-len(r_data))] = o_array[len(r_data):]
+        o_array[(plot_length-len(r_data)):] = r_data
         if to_plotter.full():
             to_plotter.get()
-        to_plotter.put(o_array)
+        to_plotter.put(o_array[0::sample_interval])
 
 def thr_waveform_plot(print_queue: multiprocessing.Queue, f_rate: int):
     f_interval  = 1000/f_rate
