@@ -10,6 +10,7 @@ import numpy as np
 import pyqtgraph
 
 def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, plot_length: int):
+    PLOT_RESAMPLE_INTERVAL_NEAR = 2048
     SOCK_BUF_SIZE = 16384
     o_array = np.zeros(plot_length)
     e_rcv_sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
@@ -20,8 +21,8 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
     e_rcv_selector = selectors.DefaultSelector()
     e_rcv_selector.register(e_rcv_sock, selectors.EVENT_READ)
     sample_interval = 1
-    if (plot_length > 4096):
-        sample_interval  = int(plot_length / 4096)
+    if (plot_length >  PLOT_RESAMPLE_INTERVAL_NEAR):
+        sample_interval  = int(plot_length /  PLOT_RESAMPLE_INTERVAL_NEAR)
         print(f"dala length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
 
     while True:

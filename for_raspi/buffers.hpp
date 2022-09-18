@@ -26,7 +26,7 @@ template <typename DTYPE> class fifo_buffer {
       buffer_arr[blength-1] = data;
       return;
     }
-    void put_data_arr(DTYPE* data_arr, uint32_t length) { 
+    void put_data_arr(DTYPE* data_arr, uint32_t length) {
       for (uint32_t tempctr=0; tempctr<length; tempctr++) {
         put_data(data_arr[tempctr]);
       }
@@ -89,9 +89,10 @@ template <typename DTYPE> class ring_buffer {
     }
     DTYPE* get_data_nelm(uint32_t length){
       std::lock_guard buf_nget_lock(mx_buf_guard);
-      ret_nl_dest = new DTYPE[length];
-      nl_allocated = true;
-
+      if (!nl_allocated) {
+        ret_nl_dest = new DTYPE[length];
+        nl_allocated = true;
+      }
       int temp_cpcount = 0;
       int temp_idx = h_idx;
       while (temp_cpcount < length) {
