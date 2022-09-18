@@ -47,6 +47,7 @@ template <typename DTYPE> class ring_buffer {
     uint32_t blength = 0;
     uint32_t h_idx = 0;
     std::mutex mx_buf_guard;
+    uint32_t nl_sz_cur = 0;
     bool nl_allocated = false;
     void inline put_data_nolock(DTYPE data){
       buffer_arr[h_idx] = data;
@@ -89,9 +90,13 @@ template <typename DTYPE> class ring_buffer {
     }
     DTYPE* get_data_nelm(uint32_t length){
       std::lock_guard buf_nget_lock(mx_buf_guard);
-      if (!nl_allocated) {
+      if (nl_sz_cur != length) {
+        if (nl_allocated) {
+          delete[] ret_nl_dest;
+        }
         ret_nl_dest = new DTYPE[length];
         nl_allocated = true;
+        nl_sz_cur = length;
       }
       int temp_cpcount = 0;
       int temp_idx = h_idx;
