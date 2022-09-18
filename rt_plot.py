@@ -5,11 +5,25 @@ from random import sample
 import socket
 import selectors
 import argparse
+import math
 
 import numpy as np
 import pyqtgraph
 
-def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, plot_length: int):
+def HanningWindow(wsize):
+	"""
+	ref: http://www.fbs.osaka-u.ac.jp/labs/ishijima/FFT-06.html
+	"""
+	warray = np.zeros(wsize)
+	iterator1 = np.arange(0,wsize,1)
+	for i in iterator1:
+		warray[i] = 0.5-(0.5*math.cos(2*math.pi*(i/(wsize-1))))
+	return warray
+
+def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, plot_length: int, filter_enabled: multiprocessing.Queue, filter_length: multiprocessing.Queue):
+    CONV_WINDOW_SIZE = 7
+    filter_toggle = False
+    conv_window = HanningWindow(CONV_WINDOW_SIZE)
     PLOT_RESAMPLE_INTERVAL_NEAR = 2048
     SOCK_BUF_SIZE = 16384
     o_array = np.zeros(plot_length)
@@ -33,7 +47,18 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
         o_array[(plot_length-len(r_data)):] = r_data
         if to_plotter.full():
             to_plotter.get()
-        to_plotter.put(o_array[0::sample_interval])
+
+        if not filter_enabled.empty():
+            filter_toggle = filter_enabled.get()
+        if not filter_length.empty():
+            CONV_WINDOW_SIZE = filter_length.get()
+            conv_window = HanningWindow(CONV_WINDOW_SIZE)
+
+        if filter_toggle:
+            temparr = np.convolve(o_array[0::sample_interval], conv_window, mode='valid') / (CONV_WINDOW_SIZE/2)
+            to_plotter.put(temparr)
+        else :
+            to_plotter.put(o_array[0::sample_interval])
 
 def thr_waveform_plot(print_queue: multiprocessing.Queue, f_rate: int):
     f_interval  = 1000/f_rate
@@ -83,15 +108,33 @@ if __name__ == '__main__':
         plot_data_length = parsed_args_dict['plot_length']
 
     plot_data_queue = multiprocessing.Queue(maxsize=256)
-    
-    e_recv_thr = multiprocessing.Process(target=thr_nw_get, args=(rcv_bind_ip, rcv_bind_port, plot_data_queue, plot_data_length), daemon=True)
+    filter_toggle_queue = multiprocessing.Queue(maxsize=8)
+    filter_length_queue = multiprocessing.Queue(maxsize=8)
+
+    e_recv_thr = multiprocessing.Process(target=thr_nw_get, args=(rcv_bind_ip, rcv_bind_port, plot_data_queue, plot_data_length, filter_toggle_queue, filter_length_queue), daemon=True)
     plot_thr = multiprocessing.Process(target=thr_waveform_plot, args=(plot_data_queue, plot_framerate), daemon=True)
     e_recv_thr.start()
     plot_thr.start()
     try:
+        comchar = ''
+        pr_flen = 0
+        pr_ftoggle = False
         print("Waiting for termination...")
-        while input() != 'q':
-            pass
+        while comchar != 'q':
+            comchar = input()
+            if comchar == 'ft':
+                pr_ftoggle = not pr_ftoggle
+                filter_toggle_queue.put(pr_ftoggle)
+                if pr_ftoggle:
+                    print("Convolution filter enabled")
+                filter_toggle_queue.put(pr_ftoggle)
+            if comchar == 'fl':
+                try:
+                    pr_flen = int(input("filter length -> "))
+                    filter_length_queue.put(pr_flen)
+                except Exception:
+                    print("illegal input")
+
     except KeyboardInterrupt:
         print(f" main: at {datetime.datetime.now().isoformat()}")
         print(" main: KeyboardInterrupt received, exiting.")
