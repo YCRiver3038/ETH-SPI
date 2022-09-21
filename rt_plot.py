@@ -1,7 +1,5 @@
 import multiprocessing
 import datetime
-import os
-from random import sample
 import socket
 import selectors
 import argparse
@@ -20,11 +18,11 @@ def HanningWindow(wsize):
 		warray[i] = 0.5-(0.5*math.cos(2*math.pi*(i/(wsize-1))))
 	return warray
 
-def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, plot_length: int, filter_enabled: multiprocessing.Queue, filter_length: multiprocessing.Queue):
+def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, plot_length: int, filter_enabled: multiprocessing.Queue, filter_length: multiprocessing.Queue, resample_length: multiprocessing.Queue):
     CONV_WINDOW_SIZE = 7
+    RESAMPLE_LENGTH_DEFAULT = 2048
     filter_toggle = False
     conv_window = HanningWindow(CONV_WINDOW_SIZE)
-    PLOT_RESAMPLE_INTERVAL_NEAR = 2048
     SOCK_BUF_SIZE = 16384
     o_array = np.zeros(plot_length)
     e_rcv_sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
@@ -35,9 +33,9 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
     e_rcv_selector = selectors.DefaultSelector()
     e_rcv_selector.register(e_rcv_sock, selectors.EVENT_READ)
     sample_interval = 1
-    if (plot_length >  PLOT_RESAMPLE_INTERVAL_NEAR):
-        sample_interval  = int(plot_length /  PLOT_RESAMPLE_INTERVAL_NEAR)
-        print(f"dala length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
+    if (plot_length >= RESAMPLE_LENGTH_DEFAULT):
+        sample_interval  = int(plot_length / RESAMPLE_LENGTH_DEFAULT)
+        print(f"data length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
 
     while True:
         e_rcv_selector.select()
@@ -53,14 +51,19 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
         if not filter_length.empty():
             CONV_WINDOW_SIZE = filter_length.get()
             conv_window = HanningWindow(CONV_WINDOW_SIZE)
+        if not resample_length.empty():
+            rs_glength = resample_length.get()
+            if (plot_length >= rs_glength):
+                sample_interval  = int(plot_length / rs_glength)
+                print(f"data length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
 
         if filter_toggle:
-            temparr = np.convolve(o_array[0::sample_interval], conv_window, mode='valid') / (CONV_WINDOW_SIZE/2)
+            temparr = np.convolve(o_array[0::sample_interval], conv_window, mode='valid') / (CONV_WINDOW_SIZE//2)
             to_plotter.put(temparr)
         else :
             to_plotter.put(o_array[0::sample_interval])
 
-def thr_waveform_plot(print_queue: multiprocessing.Queue, f_rate: int):
+def thr_waveform_plot(print_queue: multiprocessing.Queue, f_rate: int, y_range:multiprocessing.Queue):
     f_interval  = 1000/f_rate
     g_app = pyqtgraph.mkQApp()
     wf_L_graph = pyqtgraph.GraphicsLayoutWidget(title="ch.1")
@@ -71,6 +74,9 @@ def thr_waveform_plot(print_queue: multiprocessing.Queue, f_rate: int):
     print(f"plot: set frame interval: {f_interval}")
     def update_data():
         try:
+            if not y_range.empty():
+                got_range = y_range.get()
+                L_plot.setYRange(got_range[0], got_range[1])
             data_to_plot = print_queue.get()
             L_curve.setData(data_to_plot)
         except KeyboardInterrupt:
@@ -91,17 +97,17 @@ if __name__ == '__main__':
     rcv_bind_port = 60288
 
     ca_parser = argparse.ArgumentParser(description='')
-    ca_parser.add_argument("--src-address",  help="IPv4 Address to bind")
-    ca_parser.add_argument("--src-port", type=int, help="Port to bind")
+    ca_parser.add_argument("--bind-address",  help="IPv4 Address to bind")
+    ca_parser.add_argument("--bind-port", type=int, help="Port to bind")
     ca_parser.add_argument("--framerate", type=int, help="Plot framerate")
     ca_parser.add_argument("--plot-length", type=int, help="Plot data length")
 
     parsed_args = ca_parser.parse_args()
     parsed_args_dict = vars(parsed_args)
-    if parsed_args_dict['src_address'] is not None:
-        rcv_bind_ip = parsed_args_dict['src_address']
-    if parsed_args_dict['src_port'] is not None:
-        rcv_bind_port = parsed_args_dict['src_port']
+    if parsed_args_dict['bind_address'] is not None:
+        rcv_bind_ip = parsed_args_dict['bind_address']
+    if parsed_args_dict['bind_port'] is not None:
+        rcv_bind_port = parsed_args_dict['bind_port']
     if parsed_args_dict['framerate'] is not None:
         plot_framerate = parsed_args_dict['framerate']
     if parsed_args_dict['plot_length'] is not None:
@@ -110,11 +116,16 @@ if __name__ == '__main__':
     plot_data_queue = multiprocessing.Queue(maxsize=256)
     filter_toggle_queue = multiprocessing.Queue(maxsize=8)
     filter_length_queue = multiprocessing.Queue(maxsize=8)
+    y_range_queue = multiprocessing.Queue(maxsize=8)
+    resample_queue = multiprocessing.Queue(maxsize=8)
 
-    e_recv_thr = multiprocessing.Process(target=thr_nw_get, args=(rcv_bind_ip, rcv_bind_port, plot_data_queue, plot_data_length, filter_toggle_queue, filter_length_queue), daemon=True)
-    plot_thr = multiprocessing.Process(target=thr_waveform_plot, args=(plot_data_queue, plot_framerate), daemon=True)
+    y_range = [0, 1024]
+
+    e_recv_thr = multiprocessing.Process(target=thr_nw_get, args=(rcv_bind_ip, rcv_bind_port, plot_data_queue, plot_data_length, filter_toggle_queue, filter_length_queue, resample_queue), daemon=True)
+    plot_thr = multiprocessing.Process(target=thr_waveform_plot, args=(plot_data_queue, plot_framerate, y_range_queue), daemon=True)
     e_recv_thr.start()
     plot_thr.start()
+
     try:
         comchar = ''
         pr_flen = 0
@@ -134,6 +145,22 @@ if __name__ == '__main__':
                     filter_length_queue.put(pr_flen)
                 except Exception:
                     print("illegal input")
+            if comchar == 'rs':
+                try:
+                    resample_queue.put(int(input("resample length -> ")))
+                except Exception:
+                    print("illegal input")
+            if comchar == 'yr':
+                try:
+                    y_range[0] = int(input(f"y range min (current: {y_range[0]}) -> "))
+                except Exception:
+                    print("illegal input")
+
+                try:
+                    y_range[1] = int(input(f"y range max (current: {y_range[1]}) -> "))
+                except Exception:
+                    print("illegal input")
+                y_range_queue.put(y_range)
 
     except KeyboardInterrupt:
         print(f" main: at {datetime.datetime.now().isoformat()}")
