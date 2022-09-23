@@ -50,12 +50,19 @@ g++ -std=c++17 es_main.cpp GPIO.cpp network.cpp -lpigpio -lpthread
 * 依存ライブラリはインストールされているか
 * パスは通っているか
 
+## SPIで接続するデバイスについて
+動作が確認できているのはMCP3002I/Pのみです。
+その他のSPI ADCを使う場合は、SPIで送信するデータを対象のデバイスに合わせたものにしてコンパイルしてください  
+※該当する変数： `u_rw_ds w_data` (関数 `thr_read_spi_data` 内)  
+ここは、そのうち何かしらの手段を以てコンパイル後に変更できるようにしたいと思っています。
+
 ## 動作確認環境
 ### Raspberry Pi
 
 HW: Raspberry Pi Model B V1.1  
 OS: Raspberry Pi OS 32bit  
 (Linux raspberrypi 5.15.61-v7+ #1579 SMP Fri Aug 26 11:10:59 BST 2022 armv7l GNU/Linux)  
+SPI connected device: MCP3002I/P @3.3V
 
 ### Desktop PC
 
