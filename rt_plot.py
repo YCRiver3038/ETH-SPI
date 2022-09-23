@@ -40,6 +40,14 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
     while True:
         e_rcv_selector.select()
         r_data = np.frombuffer(e_rcv_sock.recv(SOCK_BUF_SIZE), dtype=np.uint16)
+        if filter_toggle:
+            r_data = np.convolve(r_data, conv_window, mode='valid') / (CONV_WINDOW_SIZE//2)
+        '''
+                if filter_toggle:
+            temparr = np.convolve(o_array[0::sample_interval], conv_window, mode='valid') / (CONV_WINDOW_SIZE//2)
+            to_plotter.put(temparr)
+        '''
+            
         #FIFO buffer
         o_array[0:(plot_length-len(r_data))] = o_array[len(r_data):]
         o_array[(plot_length-len(r_data)):] = r_data
@@ -56,10 +64,6 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
             if (plot_length >= rs_glength):
                 sample_interval  = int(plot_length / rs_glength)
                 print(f"data length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
-
-        if filter_toggle:
-            temparr = np.convolve(o_array[0::sample_interval], conv_window, mode='valid') / (CONV_WINDOW_SIZE//2)
-            to_plotter.put(temparr)
         else :
             to_plotter.put(o_array[0::sample_interval])
 
