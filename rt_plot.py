@@ -18,36 +18,40 @@ def HanningWindow(wsize):
 		warray[i] = 0.5-(0.5*math.cos(2*math.pi*(i/(wsize-1))))
 	return warray
 
-def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, plot_length: int, filter_enabled: multiprocessing.Queue, filter_length: multiprocessing.Queue, resample_length: multiprocessing.Queue):
+def thr_nw_get(bind_ip: str, bind_port: int, to_dsp: multiprocessing.Queue):
+    SOCK_BUF_SIZE = 16384
+    e_rcv_sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+
+    e_rcv_sock.bind((bind_ip, bind_port))
+    print(f"Binded address: {bind_ip}\nBinded port: {bind_port}")
+    e_rcv_sock.setblocking(False)
+    e_rcv_selector = selectors.DefaultSelector()
+    e_rcv_selector.register(e_rcv_sock, selectors.EVENT_READ)
+    while True:
+        e_rcv_selector.select()
+        r_data = np.frombuffer(e_rcv_sock.recv(SOCK_BUF_SIZE), dtype=np.uint16)
+        if to_dsp.full():
+            to_dsp.get()
+        to_dsp.put(r_data)
+
+fliter_toggle = False
+conv_window = []
+def thr_dsp(from_nw: multiprocessing.Queue, to_plotter: multiprocessing.Queue, plot_length: int, filter_enabled: multiprocessing.Queue, filter_length: multiprocessing.Queue, resample_length: multiprocessing.Queue):
+    global filter_toggle, conv_window
     CONV_WINDOW_SIZE = 7
     RESAMPLE_LENGTH_DEFAULT = 2048
     filter_toggle = False
     conv_window = HanningWindow(CONV_WINDOW_SIZE)
-    SOCK_BUF_SIZE = 16384
     o_array = np.zeros(plot_length)
-    e_rcv_sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-    e_rcv_sock.bind((bind_ip, bind_port))
-    print(f"Binded address: {bind_ip}\nBinded port: {bind_port}\nFIFO data length: {plot_length}")
 
-    e_rcv_sock.setblocking(False)
-    e_rcv_selector = selectors.DefaultSelector()
-    e_rcv_selector.register(e_rcv_sock, selectors.EVENT_READ)
     sample_interval = 1
     if (plot_length >= RESAMPLE_LENGTH_DEFAULT):
         sample_interval  = int(plot_length / RESAMPLE_LENGTH_DEFAULT)
         print(f"data length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
 
+    print(f"FIFO data length: {plot_length}")
     while True:
-        e_rcv_selector.select()
-        r_data = np.frombuffer(e_rcv_sock.recv(SOCK_BUF_SIZE), dtype=np.uint16)
-        if filter_toggle:
-            r_data = np.convolve(r_data, conv_window, mode='valid') / (CONV_WINDOW_SIZE//2)
-        '''
-                if filter_toggle:
-            temparr = np.convolve(o_array[0::sample_interval], conv_window, mode='valid') / (CONV_WINDOW_SIZE//2)
-            to_plotter.put(temparr)
-        '''
-            
+        r_data = from_nw.get()
         #FIFO buffer
         o_array[0:(plot_length-len(r_data))] = o_array[len(r_data):]
         o_array[(plot_length-len(r_data)):] = r_data
@@ -64,6 +68,9 @@ def thr_nw_get(bind_ip: str, bind_port: int, to_plotter: multiprocessing.Queue, 
             if (plot_length >= rs_glength):
                 sample_interval  = int(plot_length / rs_glength)
                 print(f"data length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
+            else:
+                sample_interval = 1
+                print(f"data length: {plot_length}, interval: {sample_interval}, to plotter: {len(o_array[0::sample_interval])}samples")
         else :
             to_plotter.put(o_array[0::sample_interval])
 
@@ -73,7 +80,7 @@ def thr_waveform_plot(print_queue: multiprocessing.Queue, f_rate: int, y_range:m
     wf_L_graph = pyqtgraph.GraphicsLayoutWidget(title="ch.1")
     L_plot = wf_L_graph.addPlot()
     L_plot.setYRange(0, 1024)
-    L_curve = L_plot.plot(symbol="o", symbolBrush=None, symbolPen=None, pen=(0, 255, 0))
+    L_curve = L_plot.plot(symbol=None, symbolBrush=None, symbolPen=None, pen=(0, 255, 0))
 
     print(f"plot: set frame interval: {f_interval}")
     def update_data():
@@ -117,7 +124,8 @@ if __name__ == '__main__':
     if parsed_args_dict['plot_length'] is not None:
         plot_data_length = parsed_args_dict['plot_length']
 
-    plot_data_queue = multiprocessing.Queue(maxsize=256)
+    nw2dsp_queue = multiprocessing.Queue(maxsize=256)
+    plot_data_queue = multiprocessing.Queue(maxsize=8)
     filter_toggle_queue = multiprocessing.Queue(maxsize=8)
     filter_length_queue = multiprocessing.Queue(maxsize=8)
     y_range_queue = multiprocessing.Queue(maxsize=8)
@@ -125,10 +133,14 @@ if __name__ == '__main__':
 
     y_range = [0, 1024]
 
-    e_recv_thr = multiprocessing.Process(target=thr_nw_get, args=(rcv_bind_ip, rcv_bind_port, plot_data_queue, plot_data_length, filter_toggle_queue, filter_length_queue, resample_queue), daemon=True)
+    e_recv_thr = multiprocessing.Process(target=thr_nw_get, args=(rcv_bind_ip, rcv_bind_port, nw2dsp_queue), daemon=True)
+    dsp_thr = multiprocessing.Process(target=thr_dsp, args=(nw2dsp_queue, plot_data_queue, plot_data_length, filter_toggle_queue, filter_length_queue, resample_queue), daemon=True)
     plot_thr = multiprocessing.Process(target=thr_waveform_plot, args=(plot_data_queue, plot_framerate, y_range_queue), daemon=True)
+
     e_recv_thr.start()
+    dsp_thr.start()
     plot_thr.start()
+    print(f"debug: PID\n NW receive{e_recv_thr.pid}\n DSP:{dsp_thr.pid}\n PLOT:{plot_thr.pid}")
 
     try:
         comchar = ''
@@ -136,7 +148,7 @@ if __name__ == '__main__':
         pr_ftoggle = False
         print("Waiting for termination...")
         while comchar != 'q':
-            comchar = input()
+            comchar = input("command > ")
             if comchar == 'ft':
                 pr_ftoggle = not pr_ftoggle
                 filter_toggle_queue.put(pr_ftoggle)
@@ -151,7 +163,10 @@ if __name__ == '__main__':
                     print("illegal input")
             if comchar == 'rs':
                 try:
-                    resample_queue.put(int(input("resample length -> ")))
+                    g_num = int(input("resample length -> "))
+                    if g_num < 1:
+                        g_num = 1
+                    resample_queue.put(g_num)
                 except Exception:
                     print("illegal input")
             if comchar == 'yr':
